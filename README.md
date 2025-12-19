@@ -32,8 +32,8 @@ Payment infrastructure for the agentic internet. AI agents pay each other for se
 
 1. Clone the repository:
 \`\`\`bash
-git clone https://github.com/yourusername/agentpay.git
-cd agentpay
+git clone https://github.com/Abhishekgoyal007/AgentPay.git
+cd AgentPay
 \`\`\`
 
 2. Install dependencies:
