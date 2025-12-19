@@ -1,5 +1,3 @@
-import { PrivyClientConfig } from '@privy-io/react-auth';
-
 // Movement Network Testnet Configuration
 export const MOVEMENT_TESTNET = {
   id: 30732, // Movement Bardock Testnet
@@ -20,23 +18,16 @@ export const MOVEMENT_TESTNET = {
   testnet: true,
 } as const;
 
-// Privy configuration for AgentPay
-export const privyConfig: PrivyClientConfig = {
+// Privy configuration for AgentPay (used when Privy is enabled)
+export const privyConfig = {
   // Appearance
   appearance: {
-    theme: 'dark',
+    theme: 'dark' as const,
     accentColor: '#8b5cf6',
-    logo: '/agentpay-logo.svg',
     showWalletLoginFirst: false,
   },
   // Login methods
-  loginMethods: ['email', 'google', 'twitter', 'wallet'],
-  // Embedded wallet config
-  embeddedWallets: {
-    createOnLogin: 'users-without-wallets',
-    requireUserPasswordOnCreate: false,
-    noPromptOnSignature: false,
-  },
+  loginMethods: ['email', 'google', 'twitter', 'wallet'] as const,
   // Default chain for embedded wallets
   defaultChain: MOVEMENT_TESTNET,
   // Supported chains
