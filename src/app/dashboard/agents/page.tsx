@@ -7,18 +7,36 @@ import { useAgents } from '@/hooks/useAgents';
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
 
+type ServiceCategory = 'text-generation' | 'image-generation' | 'translation' | 'code' | 'data' | 'custom';
+
+const categoryOptions: { value: ServiceCategory; label: string; icon: string }[] = [
+    { value: 'text-generation', label: 'Text Generation', icon: '📝' },
+    { value: 'image-generation', label: 'Image Generation', icon: '🎨' },
+    { value: 'translation', label: 'Translation', icon: '🌍' },
+    { value: 'code', label: 'Code Analysis', icon: '💻' },
+    { value: 'data', label: 'Data Processing', icon: '📊' },
+    { value: 'custom', label: 'Custom', icon: '⚡' },
+];
+
 export default function AgentsPage() {
     const demoMode = useDemoMode();
     const router = useRouter();
-    const { agents, isLoading, createAgent, toggleServiceStatus, addService } = useAgents();
+    const { agents, isLoading, createAgent, toggleServiceStatus, addService, removeService } = useAgents();
     const [mounted, setMounted] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showAddServiceModal, setShowAddServiceModal] = useState<string | null>(null);
+
+    // Create Agent form
     const [newAgentName, setNewAgentName] = useState('');
     const [newAgentDescription, setNewAgentDescription] = useState('');
+
+    // Add Service form - Enhanced
     const [newServiceName, setNewServiceName] = useState('');
     const [newServiceDescription, setNewServiceDescription] = useState('');
+    const [newServiceCategory, setNewServiceCategory] = useState<ServiceCategory>('text-generation');
     const [newServicePrice, setNewServicePrice] = useState('0.01');
+    const [newServiceApiEndpoint, setNewServiceApiEndpoint] = useState('');
+    const [listOnMarketplace, setListOnMarketplace] = useState(true);
 
     const user = demoMode.demoUser ? {
         email: { address: demoMode.demoUser.email },
@@ -45,16 +63,27 @@ export default function AgentsPage() {
 
     const handleAddService = () => {
         if (!showAddServiceModal || !newServiceName.trim()) return;
+
         addService(showAddServiceModal, {
             name: newServiceName,
             description: newServiceDescription,
+            category: newServiceCategory,
             pricePerRequest: parseFloat(newServicePrice) || 0.01,
-            status: 'active',
+            apiEndpoint: newServiceApiEndpoint || undefined,
+            listOnMarketplace: listOnMarketplace,
         });
+
         setShowAddServiceModal(null);
+        resetServiceForm();
+    };
+
+    const resetServiceForm = () => {
         setNewServiceName('');
         setNewServiceDescription('');
+        setNewServiceCategory('text-generation');
         setNewServicePrice('0.01');
+        setNewServiceApiEndpoint('');
+        setListOnMarketplace(true);
     };
 
     if (!mounted || !demoMode.ready || !demoMode.authenticated) {
@@ -80,7 +109,7 @@ export default function AgentsPage() {
                                 My <span className="gradient-text">Agents</span>
                             </h1>
                             <p className="text-[var(--text-secondary)]">
-                                Manage your AI agents and their services
+                                Create agents and list your services on the marketplace
                             </p>
                         </div>
                         <button
@@ -111,21 +140,19 @@ export default function AgentsPage() {
                                         <div className="flex-1">
                                             <div className="flex items-center gap-2 mb-1">
                                                 <h3 className="text-xl font-semibold">{agent.name}</h3>
-                                                <span className={`w-2 h-2 rounded-full ${agent.status === 'online' ? 'bg-[var(--accent-success)]' : 'bg-[var(--text-tertiary)]'
-                                                    }`} />
-                                                <span className={`text-sm ${agent.status === 'online' ? 'text-[var(--accent-success)]' : 'text-[var(--text-tertiary)]'
-                                                    }`}>
+                                                <span className={`w-2 h-2 rounded-full ${agent.status === 'online' ? 'bg-[var(--accent-success)]' : 'bg-[var(--text-tertiary)]'}`} />
+                                                <span className={`text-sm ${agent.status === 'online' ? 'text-[var(--accent-success)]' : 'text-[var(--text-tertiary)]'}`}>
                                                     {agent.status}
                                                 </span>
                                             </div>
-                                            <p className="text-sm text-[var(--text-secondary)]">{agent.description}</p>
+                                            <p className="text-sm text-[var(--text-secondary)]">{agent.description || 'No description'}</p>
                                             <div className="text-xs text-[var(--text-tertiary)] font-mono mt-1">
                                                 {agent.walletAddress.slice(0, 10)}...{agent.walletAddress.slice(-8)}
                                             </div>
                                         </div>
                                         <div className="text-right">
                                             <div className="text-2xl font-bold gradient-text mono-number">{agent.balance.toFixed(2)}</div>
-                                            <div className="text-xs text-[var(--text-tertiary)]">MOVE</div>
+                                            <div className="text-xs text-[var(--text-tertiary)]">MOVE earned</div>
                                         </div>
                                     </div>
 
@@ -167,7 +194,7 @@ export default function AgentsPage() {
                                     </div>
 
                                     {/* Services */}
-                                    <div className="mb-6">
+                                    <div>
                                         <div className="flex items-center justify-between mb-3">
                                             <h4 className="font-medium text-[var(--text-secondary)]">Services</h4>
                                             <button
@@ -177,7 +204,7 @@ export default function AgentsPage() {
                                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                                                 </svg>
-                                                Add
+                                                Add Service
                                             </button>
                                         </div>
 
@@ -195,24 +222,43 @@ export default function AgentsPage() {
                                                                         ? 'bg-[var(--accent-success)]'
                                                                         : 'bg-[var(--text-tertiary)]'
                                                                     }`}
+                                                                title={service.status === 'active' ? 'Click to pause' : 'Click to activate'}
                                                             />
                                                             <div>
-                                                                <span className="font-medium text-sm">{service.name}</span>
-                                                                <span className="text-xs text-[var(--text-tertiary)] ml-2">
-                                                                    {service.pricePerRequest} MOVE/req
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="font-medium text-sm">{service.name}</span>
+                                                                    {service.listedOnMarketplace && (
+                                                                        <span className="px-1.5 py-0.5 text-xs rounded bg-[var(--accent-primary)]/20 text-[var(--accent-primary)]">
+                                                                            Listed
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                <span className="text-xs text-[var(--text-tertiary)]">
+                                                                    {service.pricePerRequest} MOVE • {service.category}
                                                                 </span>
                                                             </div>
                                                         </div>
-                                                        <div className="flex items-center gap-4 text-xs">
-                                                            <span className="text-[var(--text-tertiary)]">{service.requests} reqs</span>
-                                                            <span className="text-[var(--accent-success)] mono-number">{service.revenue.toFixed(2)} MOVE</span>
+                                                        <div className="flex items-center gap-4">
+                                                            <div className="text-right text-xs">
+                                                                <div className="text-[var(--text-tertiary)]">{service.requests} reqs</div>
+                                                                <div className="text-[var(--accent-success)] mono-number">{service.revenue.toFixed(2)} MOVE</div>
+                                                            </div>
+                                                            <button
+                                                                onClick={() => removeService(agent.id, service.id)}
+                                                                className="p-1 text-[var(--text-tertiary)] hover:text-[var(--accent-error)] transition-colors"
+                                                                title="Remove service"
+                                                            >
+                                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                                </svg>
+                                                            </button>
                                                         </div>
                                                     </div>
                                                 ))}
                                             </div>
                                         ) : (
-                                            <div className="text-center py-4 text-sm text-[var(--text-tertiary)]">
-                                                No services yet. Add one to start earning!
+                                            <div className="text-center py-6 text-sm text-[var(--text-tertiary)]">
+                                                No services yet. Add one to list on the marketplace!
                                             </div>
                                         )}
                                     </div>
@@ -231,7 +277,7 @@ export default function AgentsPage() {
                                 </div>
                                 <h3 className="text-lg font-semibold mb-2">Create New Agent</h3>
                                 <p className="text-sm text-[var(--text-tertiary)] text-center">
-                                    Deploy a new AI agent with its own wallet
+                                    Deploy a new AI agent and list services on the marketplace
                                 </p>
                             </div>
                         </div>
@@ -288,7 +334,7 @@ export default function AgentsPage() {
                                     <span className="font-medium text-[var(--accent-primary)]">Embedded Wallet</span>
                                 </div>
                                 <p className="text-sm text-[var(--text-secondary)]">
-                                    A new wallet will be automatically created for this agent.
+                                    A new wallet will be created automatically to receive payments.
                                 </p>
                             </div>
 
@@ -304,14 +350,14 @@ export default function AgentsPage() {
                 </div>
             )}
 
-            {/* Add Service Modal */}
+            {/* Add Service Modal - Enhanced */}
             {showAddServiceModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-                    <div className="glass-card p-8 w-full max-w-md mx-4">
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm overflow-y-auto py-8">
+                    <div className="glass-card p-8 w-full max-w-lg mx-4">
                         <div className="flex items-center justify-between mb-6">
                             <h2 className="text-2xl font-bold">Add Service</h2>
                             <button
-                                onClick={() => setShowAddServiceModal(null)}
+                                onClick={() => { setShowAddServiceModal(null); resetServiceForm(); }}
                                 className="p-2 hover:bg-[var(--bg-tertiary)] rounded-lg transition-colors"
                             >
                                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -329,10 +375,33 @@ export default function AgentsPage() {
                                     type="text"
                                     value={newServiceName}
                                     onChange={(e) => setNewServiceName(e.target.value)}
-                                    placeholder="Text Generation"
+                                    placeholder="Text Generation API"
                                     className="input-field"
                                 />
                             </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+                                    Category <span className="text-[var(--accent-error)]">*</span>
+                                </label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {categoryOptions.map((cat) => (
+                                        <button
+                                            key={cat.value}
+                                            type="button"
+                                            onClick={() => setNewServiceCategory(cat.value)}
+                                            className={`p-3 rounded-xl text-center transition-all ${newServiceCategory === cat.value
+                                                    ? 'bg-[var(--accent-primary)] text-white'
+                                                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
+                                                }`}
+                                        >
+                                            <div className="text-xl mb-1">{cat.icon}</div>
+                                            <div className="text-xs">{cat.label}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
                             <div>
                                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
                                     Description
@@ -340,13 +409,14 @@ export default function AgentsPage() {
                                 <textarea
                                     value={newServiceDescription}
                                     onChange={(e) => setNewServiceDescription(e.target.value)}
-                                    placeholder="Describe what the service does"
+                                    placeholder="Describe what your service does..."
                                     className="input-field min-h-[80px] resize-none"
                                 />
                             </div>
+
                             <div>
                                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
-                                    Price per Request (MOVE)
+                                    Price per Request (MOVE) <span className="text-[var(--accent-error)]">*</span>
                                 </label>
                                 <input
                                     type="number"
@@ -358,12 +428,46 @@ export default function AgentsPage() {
                                 />
                             </div>
 
+                            <div>
+                                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+                                    API Endpoint (Optional)
+                                </label>
+                                <input
+                                    type="text"
+                                    value={newServiceApiEndpoint}
+                                    onChange={(e) => setNewServiceApiEndpoint(e.target.value)}
+                                    placeholder="https://your-api.com/endpoint"
+                                    className="input-field"
+                                />
+                                <p className="text-xs text-[var(--text-tertiary)] mt-1">
+                                    Leave empty to use built-in mock AI responses for demo
+                                </p>
+                            </div>
+
+                            <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--bg-tertiary)]">
+                                <div>
+                                    <div className="font-medium">List on Marketplace</div>
+                                    <div className="text-sm text-[var(--text-tertiary)]">Allow others to use this service</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setListOnMarketplace(!listOnMarketplace)}
+                                    className={`relative w-12 h-6 rounded-full transition-colors ${listOnMarketplace ? 'bg-[var(--accent-primary)]' : 'bg-[var(--bg-card)]'
+                                        }`}
+                                >
+                                    <span className={`absolute top-1 w-4 h-4 rounded-full transition-transform ${listOnMarketplace
+                                            ? 'right-1 bg-white'
+                                            : 'left-1 bg-[var(--text-tertiary)]'
+                                        }`} />
+                                </button>
+                            </div>
+
                             <button
                                 onClick={handleAddService}
                                 disabled={!newServiceName.trim()}
                                 className="btn-primary w-full mt-4 disabled:opacity-50"
                             >
-                                Add Service
+                                Add Service {listOnMarketplace && '& List on Marketplace'}
                             </button>
                         </div>
                     </div>
