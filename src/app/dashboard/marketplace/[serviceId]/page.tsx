@@ -3,12 +3,14 @@
 import { useRouter, useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useDemoMode } from '@/providers/PrivyProvider';
+import { useX402Service } from '@/hooks/useX402Service';
+import { useWallet } from '@/hooks/useWallet';
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
 import Link from 'next/link';
 
-// Mock service data - same as marketplace
-const mockServices: Record<string, {
+// Service definitions with full details
+const servicesData: Record<string, {
     id: string;
     name: string;
     description: string;
@@ -18,60 +20,92 @@ const mockServices: Record<string, {
     agent: { name: string; rating: number; avatar: string; address: string };
     stats: { requests: number; successRate: number; avgResponseTime: number };
     tags: string[];
-    inputSchema: { field: string; type: string; required: boolean; description: string }[];
-    outputExample: object;
+    inputSchema: { field: string; type: string; required: boolean; description: string; placeholder?: string }[];
 }> = {
     'svc-001': {
         id: 'svc-001',
         name: 'GPT-4 Text Generation',
         description: 'High-quality text generation powered by GPT-4.',
-        longDescription: 'Generate high-quality text content using OpenAI\'s GPT-4 model. Perfect for content creation, summaries, creative writing, code generation, and more. Supports system prompts, temperature control, and context preservation.',
+        longDescription: 'Generate high-quality text content using OpenAI\'s GPT-4 model. Perfect for content creation, summaries, creative writing, code generation, and more.',
         category: 'ai-generation',
         pricePerRequest: 0.01,
         agent: { name: 'TextMaster AI', rating: 4.9, avatar: '🤖', address: '0xABC...DEF' },
         stats: { requests: 15420, successRate: 99.8, avgResponseTime: 1200 },
         tags: ['AI', 'Writing', 'GPT-4', 'Text'],
         inputSchema: [
-            { field: 'prompt', type: 'string', required: true, description: 'The text prompt to generate from' },
-            { field: 'max_tokens', type: 'number', required: false, description: 'Maximum tokens to generate (default: 500)' },
-            { field: 'temperature', type: 'number', required: false, description: 'Creativity level 0-1 (default: 0.7)' },
+            { field: 'prompt', type: 'string', required: true, description: 'The text prompt to generate from', placeholder: 'Write a short story about...' },
         ],
-        outputExample: { text: 'Generated text content...', tokens_used: 150, model: 'gpt-4' },
     },
     'svc-002': {
         id: 'svc-002',
         name: 'Image Generation (SDXL)',
-        description: 'Create stunning images from text prompts using Stable Diffusion XL.',
-        longDescription: 'Generate beautiful, high-resolution images from text descriptions using Stable Diffusion XL. Supports various styles, aspect ratios, and negative prompts for fine-tuned control over the output.',
+        description: 'Create stunning images from text prompts.',
+        longDescription: 'Generate beautiful, high-resolution images from text descriptions using Stable Diffusion XL.',
         category: 'ai-generation',
         pricePerRequest: 0.05,
         agent: { name: 'PixelForge', rating: 4.8, avatar: '🎨', address: '0x123...456' },
         stats: { requests: 8730, successRate: 99.5, avgResponseTime: 5000 },
         tags: ['AI', 'Images', 'SDXL', 'Art'],
         inputSchema: [
-            { field: 'prompt', type: 'string', required: true, description: 'Text description of the image to generate' },
-            { field: 'negative_prompt', type: 'string', required: false, description: 'What to avoid in the image' },
-            { field: 'width', type: 'number', required: false, description: 'Image width (default: 1024)' },
-            { field: 'height', type: 'number', required: false, description: 'Image height (default: 1024)' },
+            { field: 'prompt', type: 'string', required: true, description: 'Text description of the image', placeholder: 'A futuristic city at sunset...' },
         ],
-        outputExample: { url: 'https://...', width: 1024, height: 1024, seed: 12345 },
     },
     'svc-003': {
         id: 'svc-003',
         name: 'Real-time Translation',
-        description: 'Translate text between 100+ languages with near-native quality.',
-        longDescription: 'Professional-grade translation supporting over 100 languages. Uses advanced neural machine translation with context awareness for accurate, natural-sounding translations.',
+        description: 'Translate text between 100+ languages.',
+        longDescription: 'Professional-grade translation supporting over 100 languages with context awareness.',
         category: 'translation',
         pricePerRequest: 0.002,
         agent: { name: 'LinguaBot', rating: 4.7, avatar: '🌍', address: '0x789...012' },
         stats: { requests: 42100, successRate: 99.9, avgResponseTime: 300 },
         tags: ['Translation', 'Languages', 'NLP'],
         inputSchema: [
-            { field: 'text', type: 'string', required: true, description: 'Text to translate' },
-            { field: 'source_lang', type: 'string', required: false, description: 'Source language (auto-detect if omitted)' },
-            { field: 'target_lang', type: 'string', required: true, description: 'Target language code (e.g., "es", "fr", "de")' },
+            { field: 'text', type: 'string', required: true, description: 'Text to translate', placeholder: 'Hello, how are you?' },
+            { field: 'target_lang', type: 'string', required: true, description: 'Target language code', placeholder: 'es' },
         ],
-        outputExample: { translated: 'Hola mundo', source_lang: 'en', target_lang: 'es' },
+    },
+    'svc-004': {
+        id: 'svc-004',
+        name: 'Code Review & Analysis',
+        description: 'Automated code review with security analysis.',
+        longDescription: 'Get automated code reviews with security analysis, best practices, and performance tips.',
+        category: 'analysis',
+        pricePerRequest: 0.03,
+        agent: { name: 'CodeSentry', rating: 4.9, avatar: '🔍', address: '0xCDE...789' },
+        stats: { requests: 5240, successRate: 99.6, avgResponseTime: 2000 },
+        tags: ['Code', 'Security', 'Review'],
+        inputSchema: [
+            { field: 'code', type: 'string', required: true, description: 'Code to review', placeholder: 'function example() { ... }' },
+        ],
+    },
+    'svc-005': {
+        id: 'svc-005',
+        name: 'Data Extraction API',
+        description: 'Extract structured data from documents.',
+        longDescription: 'Extract structured data from websites, PDFs, and documents. Returns clean JSON output.',
+        category: 'data-processing',
+        pricePerRequest: 0.008,
+        agent: { name: 'DataMiner', rating: 4.6, avatar: '⛏️', address: '0xEFG...123' },
+        stats: { requests: 28900, successRate: 98.7, avgResponseTime: 1500 },
+        tags: ['Data', 'Scraping', 'ETL'],
+        inputSchema: [
+            { field: 'url', type: 'string', required: true, description: 'URL or text to extract from', placeholder: 'https://example.com' },
+        ],
+    },
+    'svc-006': {
+        id: 'svc-006',
+        name: 'Audio Transcription',
+        description: 'Convert audio to text with timestamps.',
+        longDescription: 'Convert audio files to text with speaker diarization and timestamp support.',
+        category: 'data-processing',
+        pricePerRequest: 0.02,
+        agent: { name: 'TranscribeAI', rating: 4.8, avatar: '🎙️', address: '0xHIJ...456' },
+        stats: { requests: 11200, successRate: 99.2, avgResponseTime: 3000 },
+        tags: ['Audio', 'Transcription', 'Speech'],
+        inputSchema: [
+            { field: 'audio_url', type: 'string', required: true, description: 'URL to audio file', placeholder: 'https://example.com/audio.mp3' },
+        ],
     },
 };
 
@@ -79,13 +113,15 @@ export default function ServiceDetailPage() {
     const params = useParams();
     const router = useRouter();
     const demoMode = useDemoMode();
+    const { executeService, isProcessing } = useX402Service();
+    const { balance, fundWallet } = useWallet();
     const [mounted, setMounted] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [testInput, setTestInput] = useState('');
-    const [testResult, setTestResult] = useState<string | null>(null);
+    const [inputs, setInputs] = useState<Record<string, string>>({});
+    const [result, setResult] = useState<{ success: boolean; data?: unknown; error?: string; txHash?: string } | null>(null);
+    const [showFundModal, setShowFundModal] = useState(false);
 
     const serviceId = params.serviceId as string;
-    const service = mockServices[serviceId];
+    const service = servicesData[serviceId];
 
     const user = demoMode.demoUser ? {
         email: { address: demoMode.demoUser.email },
@@ -102,21 +138,46 @@ export default function ServiceDetailPage() {
         }
     }, [demoMode.ready, demoMode.authenticated, router]);
 
-    const handleTestService = async () => {
-        setIsProcessing(true);
-        setTestResult(null);
+    const handleInputChange = (field: string, value: string) => {
+        setInputs(prev => ({ ...prev, [field]: value }));
+    };
 
-        // Simulate x402 payment flow
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    const handleExecute = async () => {
+        if (!service) return;
 
-        // Mock response
-        setTestResult(JSON.stringify({
-            success: true,
-            payment: { amount: service?.pricePerRequest, status: 'completed' },
-            result: service?.outputExample,
-        }, null, 2));
+        // Check balance
+        if (balance < service.pricePerRequest) {
+            setShowFundModal(true);
+            return;
+        }
 
-        setIsProcessing(false);
+        setResult(null);
+
+        const response = await executeService(
+            service.id,
+            service.name,
+            service.pricePerRequest,
+            service.agent.address,
+            inputs
+        );
+
+        if (response.success) {
+            setResult({
+                success: true,
+                data: response.result,
+                txHash: response.txHash,
+            });
+        } else {
+            setResult({
+                success: false,
+                error: response.error,
+            });
+        }
+    };
+
+    const handleFund = async () => {
+        await fundWallet(10);
+        setShowFundModal(false);
     };
 
     if (!mounted || !demoMode.ready || !demoMode.authenticated) {
@@ -142,6 +203,8 @@ export default function ServiceDetailPage() {
             </div>
         );
     }
+
+    const canAfford = balance >= service.pricePerRequest;
 
     return (
         <div className="min-h-screen bg-[var(--bg-primary)] grid-pattern">
@@ -185,6 +248,11 @@ export default function ServiceDetailPage() {
                                     {service.pricePerRequest} MOVE
                                 </div>
                                 <div className="text-sm text-[var(--text-tertiary)]">per request</div>
+                                <div className="mt-2 text-sm">
+                                    Your balance: <span className={`font-semibold ${canAfford ? 'text-[var(--accent-success)]' : 'text-[var(--accent-error)]'}`}>
+                                        {balance.toFixed(4)} MOVE
+                                    </span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -214,33 +282,80 @@ export default function ServiceDetailPage() {
                                 </div>
                             </div>
 
-                            {/* Input Schema */}
-                            <div className="glass-card p-6">
-                                <h2 className="text-xl font-semibold mb-4">Input Parameters</h2>
-                                <div className="space-y-3">
-                                    {service.inputSchema.map((param, idx) => (
-                                        <div key={idx} className="p-4 rounded-xl bg-[var(--bg-tertiary)]/50">
-                                            <div className="flex items-center gap-2 mb-1">
-                                                <code className="text-[var(--accent-primary)] font-mono">{param.field}</code>
-                                                <span className="text-xs text-[var(--text-tertiary)]">({param.type})</span>
-                                                {param.required && (
-                                                    <span className="text-xs text-[var(--accent-error)]">required</span>
-                                                )}
-                                            </div>
-                                            <p className="text-sm text-[var(--text-secondary)]">{param.description}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
+                            {/* Result Display */}
+                            {result && (
+                                <div className={`glass-card p-6 border ${result.success ? 'border-[var(--accent-success)]/30' : 'border-[var(--accent-error)]/30'}`}>
+                                    <div className="flex items-center gap-2 mb-4">
+                                        {result.success ? (
+                                            <>
+                                                <svg className="w-5 h-5 text-[var(--accent-success)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                </svg>
+                                                <span className="font-semibold text-[var(--accent-success)]">Execution Successful!</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <svg className="w-5 h-5 text-[var(--accent-error)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                </svg>
+                                                <span className="font-semibold text-[var(--accent-error)]">Execution Failed</span>
+                                            </>
+                                        )}
+                                    </div>
 
-                            {/* Output Example */}
-                            <div className="glass-card p-6">
-                                <h2 className="text-xl font-semibold mb-4">Example Output</h2>
-                                <pre className="p-4 rounded-xl bg-[var(--bg-tertiary)] overflow-x-auto">
-                                    <code className="text-sm text-[var(--text-secondary)]">
-                                        {JSON.stringify(service.outputExample, null, 2)}
-                                    </code>
-                                </pre>
+                                    {result.txHash && (
+                                        <div className="mb-4 p-3 rounded-lg bg-[var(--bg-tertiary)]">
+                                            <div className="text-xs text-[var(--text-tertiary)] mb-1">Transaction Hash</div>
+                                            <a
+                                                href={`https://explorer.movementnetwork.xyz/tx/${result.txHash}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-sm font-mono text-[var(--accent-primary)] hover:underline break-all"
+                                            >
+                                                {result.txHash}
+                                            </a>
+                                        </div>
+                                    )}
+
+                                    {result.success && result.data !== undefined && (
+                                        <div>
+                                            <div className="text-sm text-[var(--text-tertiary)] mb-2">Response:</div>
+                                            <pre className="p-4 rounded-xl bg-[var(--bg-tertiary)] overflow-x-auto text-sm whitespace-pre-wrap">
+                                                <code className="text-[var(--text-secondary)]">
+                                                    {JSON.stringify(result.data as Record<string, unknown>, null, 2)}
+                                                </code>
+                                            </pre>
+                                        </div>
+                                    )}
+
+                                    {!result.success && result.error && (
+                                        <p className="text-[var(--accent-error)]">{result.error}</p>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* x402 Payment Flow Info */}
+                            <div className="glass-card p-6 border border-[var(--accent-primary)]/30">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <svg className="w-6 h-6 text-[var(--accent-primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                    </svg>
+                                    <h3 className="font-semibold text-lg">x402 Payment Protocol</h3>
+                                </div>
+                                <div className="space-y-3 text-sm">
+                                    <div className="flex items-start gap-3">
+                                        <span className="w-6 h-6 rounded-full bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] flex items-center justify-center text-xs font-bold">1</span>
+                                        <p className="text-[var(--text-secondary)]">You submit a request with payment signature</p>
+                                    </div>
+                                    <div className="flex items-start gap-3">
+                                        <span className="w-6 h-6 rounded-full bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] flex items-center justify-center text-xs font-bold">2</span>
+                                        <p className="text-[var(--text-secondary)]">Payment is verified atomically with service execution</p>
+                                    </div>
+                                    <div className="flex items-start gap-3">
+                                        <span className="w-6 h-6 rounded-full bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] flex items-center justify-center text-xs font-bold">3</span>
+                                        <p className="text-[var(--text-secondary)]">Result returned instantly with payment receipt</p>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -268,24 +383,46 @@ export default function ServiceDetailPage() {
                                 </div>
                             </div>
 
-                            {/* Try It Out */}
+                            {/* Execute Service */}
                             <div className="glass-card p-6">
-                                <h3 className="font-semibold mb-4">Try It Out</h3>
-                                <textarea
-                                    value={testInput}
-                                    onChange={(e) => setTestInput(e.target.value)}
-                                    placeholder="Enter your test input..."
-                                    className="input-field mb-4 min-h-[100px] resize-none"
-                                />
+                                <h3 className="font-semibold mb-4">Execute Service</h3>
+
+                                <div className="space-y-4 mb-6">
+                                    {service.inputSchema.map((input) => (
+                                        <div key={input.field}>
+                                            <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+                                                {input.field}
+                                                {input.required && <span className="text-[var(--accent-error)] ml-1">*</span>}
+                                            </label>
+                                            {input.type === 'string' && input.field.includes('code') || input.field.includes('prompt') ? (
+                                                <textarea
+                                                    value={inputs[input.field] || ''}
+                                                    onChange={(e) => handleInputChange(input.field, e.target.value)}
+                                                    placeholder={input.placeholder || input.description}
+                                                    className="input-field min-h-[100px] resize-none"
+                                                />
+                                            ) : (
+                                                <input
+                                                    type="text"
+                                                    value={inputs[input.field] || ''}
+                                                    onChange={(e) => handleInputChange(input.field, e.target.value)}
+                                                    placeholder={input.placeholder || input.description}
+                                                    className="input-field"
+                                                />
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+
                                 <button
-                                    onClick={handleTestService}
-                                    disabled={isProcessing}
-                                    className="btn-primary w-full flex items-center justify-center gap-2"
+                                    onClick={handleExecute}
+                                    disabled={isProcessing || service.inputSchema.some(i => i.required && !inputs[i.field])}
+                                    className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
                                 >
                                     {isProcessing ? (
                                         <>
-                                            <div className="spinner" />
-                                            Processing Payment...
+                                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                            Processing...
                                         </>
                                     ) : (
                                         <>
@@ -297,37 +434,43 @@ export default function ServiceDetailPage() {
                                     )}
                                 </button>
 
-                                {testResult && (
-                                    <div className="mt-4">
-                                        <div className="text-sm text-[var(--accent-success)] mb-2 flex items-center gap-2">
-                                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                            </svg>
-                                            Payment Successful!
-                                        </div>
-                                        <pre className="p-3 rounded-xl bg-[var(--bg-tertiary)] text-xs overflow-x-auto">
-                                            <code>{testResult}</code>
-                                        </pre>
-                                    </div>
+                                {!canAfford && (
+                                    <p className="mt-2 text-sm text-[var(--accent-error)] text-center">
+                                        Insufficient balance. You need {service.pricePerRequest} MOVE.
+                                    </p>
                                 )}
-                            </div>
-
-                            {/* x402 Info */}
-                            <div className="glass-card p-6 border-[var(--accent-primary)]/30">
-                                <div className="flex items-center gap-2 mb-3">
-                                    <svg className="w-5 h-5 text-[var(--accent-primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                    <h3 className="font-semibold text-[var(--accent-primary)]">Powered by x402</h3>
-                                </div>
-                                <p className="text-sm text-[var(--text-secondary)]">
-                                    This service uses the x402 payment protocol. Your payment is processed instantly and atomically with the service execution.
-                                </p>
                             </div>
                         </div>
                     </div>
                 </div>
             </main>
+
+            {/* Fund Wallet Modal */}
+            {showFundModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="glass-card p-8 w-full max-w-md mx-4">
+                        <h2 className="text-2xl font-bold mb-4">Insufficient Balance</h2>
+                        <p className="text-[var(--text-secondary)] mb-6">
+                            You need at least {service.pricePerRequest} MOVE to use this service.
+                            Your current balance is {balance.toFixed(4)} MOVE.
+                        </p>
+                        <div className="flex gap-4">
+                            <button
+                                onClick={() => setShowFundModal(false)}
+                                className="flex-1 btn-secondary"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleFund}
+                                className="flex-1 btn-primary"
+                            >
+                                Get 10 MOVE
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
