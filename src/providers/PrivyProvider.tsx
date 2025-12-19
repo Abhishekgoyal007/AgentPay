@@ -1,9 +1,10 @@
 'use client';
 
+import { PrivyProvider as PrivyAuthProvider, usePrivy } from '@privy-io/react-auth';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactNode, useState, createContext, useContext, useEffect } from 'react';
 
-interface PrivyProviderProps {
+interface PrivyWrapperProps {
     children: ReactNode;
 }
 
@@ -21,7 +22,7 @@ interface DemoModeContextType {
 }
 
 const DemoModeContext = createContext<DemoModeContextType>({
-    isDemoMode: true,
+    isDemoMode: false,
     demoUser: null,
     login: () => { },
     logout: () => { },
@@ -31,77 +32,100 @@ const DemoModeContext = createContext<DemoModeContextType>({
 
 export const useDemoMode = () => useContext(DemoModeContext);
 
-// Check if Privy is configured
+// The Privy App ID - check at runtime
 const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
-const isPrivyConfigured = PRIVY_APP_ID && PRIVY_APP_ID !== 'your-privy-app-id' && PRIVY_APP_ID.startsWith('cl');
 
-// Dynamic Privy import wrapper
-function PrivyWrapper({ children }: { children: ReactNode }) {
-    const [PrivyProvider, setPrivyProvider] = useState<React.ComponentType<{ appId: string; children: ReactNode }> | null>(null);
-    const [loading, setLoading] = useState(true);
+// Inner component that uses Privy hooks
+function PrivyIntegration({ children }: { children: ReactNode }) {
+    const { login, logout, authenticated, ready, user } = usePrivy();
 
-    useEffect(() => {
-        if (isPrivyConfigured) {
-            import('@privy-io/react-auth').then((mod) => {
-                setPrivyProvider(() => mod.PrivyProvider);
-                setLoading(false);
-            }).catch(() => {
-                setLoading(false);
-            });
-        } else {
-            setLoading(false);
-        }
-    }, []);
+    const demoUser = authenticated && user ? {
+        email: user.email?.address || 'user@agentpay.xyz',
+        wallet: { address: user.wallet?.address || '0x' + '0'.repeat(40) }
+    } : null;
 
-    if (loading) {
-        return (
-            <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
-                <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-            </div>
-        );
-    }
-
-    if (PrivyProvider && isPrivyConfigured && PRIVY_APP_ID) {
-        return <PrivyProvider appId={PRIVY_APP_ID}>{children}</PrivyProvider>;
-    }
-
-    return <>{children}</>;
+    return (
+        <DemoModeContext.Provider
+            value={{
+                isDemoMode: false,
+                demoUser,
+                login,
+                logout,
+                authenticated,
+                ready,
+            }}
+        >
+            {children}
+        </DemoModeContext.Provider>
+    );
 }
 
-export function PrivyProvider({ children }: PrivyProviderProps) {
+// Demo mode fallback
+function DemoModeProvider({ children }: { children: ReactNode }) {
     const [authenticated, setAuthenticated] = useState(false);
-    const [queryClient] = useState(() => new QueryClient());
 
     const demoUser = authenticated ? {
         email: 'demo@agentpay.xyz',
         wallet: { address: '0x1234567890abcdef1234567890abcdef12345678' }
     } : null;
 
-    // Log demo mode status once on mount
     useEffect(() => {
-        if (!isPrivyConfigured) {
-            console.log('🎮 Running in Demo Mode - Set NEXT_PUBLIC_PRIVY_APP_ID in .env.local to enable Privy');
-        }
+        console.log('🎮 Running in Demo Mode - Privy App ID not found');
+        console.log('NEXT_PUBLIC_PRIVY_APP_ID:', process.env.NEXT_PUBLIC_PRIVY_APP_ID);
     }, []);
 
     return (
+        <DemoModeContext.Provider
+            value={{
+                isDemoMode: true,
+                demoUser,
+                login: () => setAuthenticated(true),
+                logout: () => setAuthenticated(false),
+                authenticated,
+                ready: true,
+            }}
+        >
+            {children}
+        </DemoModeContext.Provider>
+    );
+}
+
+export function PrivyProvider({ children }: PrivyWrapperProps) {
+    const [queryClient] = useState(() => new QueryClient());
+
+    // Debug log
+    console.log('PrivyProvider init - PRIVY_APP_ID:', PRIVY_APP_ID);
+
+    // Check if Privy is configured
+    if (!PRIVY_APP_ID || PRIVY_APP_ID.length < 10) {
+        return (
+            <QueryClientProvider client={queryClient}>
+                <DemoModeProvider>
+                    {children}
+                </DemoModeProvider>
+            </QueryClientProvider>
+        );
+    }
+
+    console.log('✅ Privy configured with App ID:', PRIVY_APP_ID);
+
+    return (
         <QueryClientProvider client={queryClient}>
-            <DemoModeContext.Provider
-                value={{
-                    isDemoMode: !isPrivyConfigured,
-                    demoUser,
-                    login: () => setAuthenticated(true),
-                    logout: () => setAuthenticated(false),
-                    authenticated,
-                    ready: true,
+            <PrivyAuthProvider
+                appId={PRIVY_APP_ID}
+                config={{
+                    appearance: {
+                        theme: 'dark',
+                        accentColor: '#8b5cf6',
+                        showWalletLoginFirst: false,
+                    },
+                    loginMethods: ['email', 'wallet'],
                 }}
             >
-                {isPrivyConfigured ? (
-                    <PrivyWrapper>{children}</PrivyWrapper>
-                ) : (
-                    children
-                )}
-            </DemoModeContext.Provider>
+                <PrivyIntegration>
+                    {children}
+                </PrivyIntegration>
+            </PrivyAuthProvider>
         </QueryClientProvider>
     );
 }

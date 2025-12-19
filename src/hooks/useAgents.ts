@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useDemoMode } from '@/providers/PrivyProvider';
 
 interface Service {
     id: string;
@@ -31,81 +32,57 @@ interface Agent {
     };
 }
 
-const AGENTS_STORAGE_KEY = 'agentpay_agents';
+// Get storage key based on user address
+const getStorageKey = (address: string) => `agentpay_${address}_agents`;
 
-// Generate a random wallet address
+// Generate a random wallet address for agent
 const generateWalletAddress = () => {
     return '0x' + Array.from({ length: 40 }, () =>
         Math.floor(Math.random() * 16).toString(16)
     ).join('');
 };
 
-// Default agent for new users
-const createDefaultAgent = (): Agent => ({
-    id: `agent-${Date.now()}`,
-    name: 'My First Agent',
-    description: 'A versatile AI agent for various tasks',
-    status: 'online',
-    walletAddress: generateWalletAddress(),
-    balance: 50.0,
-    createdAt: new Date(),
-    services: [
-        {
-            id: `svc-${Date.now()}-1`,
-            name: 'Text Generation',
-            description: 'Generate high-quality text content',
-            pricePerRequest: 0.01,
-            status: 'active',
-            requests: 0,
-            revenue: 0,
-        },
-    ],
-    stats: {
-        totalEarnings: 0,
-        totalSpent: 0,
-        servicesProvided: 0,
-        servicesConsumed: 0,
-        rating: 0,
-        ratingCount: 0,
-    },
-});
-
 export function useAgents() {
+    const { authenticated, demoUser } = useDemoMode();
     const [agents, setAgents] = useState<Agent[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    // Load agents from localStorage
+    const userAddress = demoUser?.wallet?.address || null;
+
+    // Load agents from localStorage (user-specific)
     useEffect(() => {
         if (typeof window === 'undefined') return;
 
-        const saved = localStorage.getItem(AGENTS_STORAGE_KEY);
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                setAgents(parsed.map((a: Agent) => ({
-                    ...a,
-                    createdAt: new Date(a.createdAt),
-                })));
-            } catch {
-                // Create default agent if parsing fails
-                const defaultAgent = createDefaultAgent();
-                setAgents([defaultAgent]);
-                localStorage.setItem(AGENTS_STORAGE_KEY, JSON.stringify([defaultAgent]));
+        if (authenticated && userAddress) {
+            const storageKey = getStorageKey(userAddress);
+            const saved = localStorage.getItem(storageKey);
+
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    setAgents(parsed.map((a: Agent) => ({
+                        ...a,
+                        createdAt: new Date(a.createdAt),
+                    })));
+                } catch {
+                    setAgents([]);
+                }
+            } else {
+                // New user - start with empty agents
+                setAgents([]);
             }
         } else {
-            // Create default agent for new users
-            const defaultAgent = createDefaultAgent();
-            setAgents([defaultAgent]);
-            localStorage.setItem(AGENTS_STORAGE_KEY, JSON.stringify([defaultAgent]));
+            setAgents([]);
         }
         setIsLoading(false);
-    }, []);
+    }, [authenticated, userAddress]);
 
-    // Save agents to localStorage
+    // Save agents to localStorage (user-specific)
     const saveAgents = useCallback((newAgents: Agent[]) => {
+        if (!userAddress) return;
         setAgents(newAgents);
-        localStorage.setItem(AGENTS_STORAGE_KEY, JSON.stringify(newAgents));
-    }, []);
+        localStorage.setItem(getStorageKey(userAddress), JSON.stringify(newAgents));
+    }, [userAddress]);
 
     // Create new agent
     const createAgent = useCallback((name: string, description: string) => {
@@ -168,6 +145,16 @@ export function useAgents() {
         return newService;
     }, [agents, updateAgent]);
 
+    // Remove service from agent
+    const removeService = useCallback((agentId: string, serviceId: string) => {
+        const agent = agents.find(a => a.id === agentId);
+        if (!agent) return;
+
+        updateAgent(agentId, {
+            services: agent.services.filter(s => s.id !== serviceId),
+        });
+    }, [agents, updateAgent]);
+
     // Toggle service status
     const toggleServiceStatus = useCallback((agentId: string, serviceId: string) => {
         const agent = agents.find(a => a.id === agentId);
@@ -215,6 +202,7 @@ export function useAgents() {
         updateAgent,
         deleteAgent,
         addService,
+        removeService,
         toggleServiceStatus,
         recordServiceUsage,
     };

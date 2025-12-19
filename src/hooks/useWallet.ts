@@ -21,10 +21,8 @@ interface Transaction {
     txHash?: string;
 }
 
-// Storage keys
-const WALLET_STORAGE_KEY = 'agentpay_wallet';
-const TRANSACTIONS_STORAGE_KEY = 'agentpay_transactions';
-const WALLET_BALANCE_KEY = 'agentpay_balance';
+// Get storage key based on user address
+const getStorageKey = (address: string, key: string) => `agentpay_${address}_${key}`;
 
 export function useWallet() {
     const { authenticated, demoUser, isDemoMode } = useDemoMode();
@@ -36,42 +34,63 @@ export function useWallet() {
     });
     const [transactions, setTransactions] = useState<Transaction[]>([]);
 
-    // Initialize wallet from localStorage
+    const userAddress = demoUser?.wallet?.address || null;
+
+    // Initialize wallet from localStorage (user-specific)
     useEffect(() => {
         if (typeof window === 'undefined') return;
 
-        const savedBalance = localStorage.getItem(WALLET_BALANCE_KEY);
-        const savedTransactions = localStorage.getItem(TRANSACTIONS_STORAGE_KEY);
+        if (authenticated && userAddress) {
+            const balanceKey = getStorageKey(userAddress, 'balance');
+            const txKey = getStorageKey(userAddress, 'transactions');
 
-        if (authenticated && demoUser) {
+            const savedBalance = localStorage.getItem(balanceKey);
+            const savedTransactions = localStorage.getItem(txKey);
+
+            // New users start with 100 MOVE for demo purposes
+            const initialBalance = savedBalance !== null ? parseFloat(savedBalance) : 100.0;
+
             setWalletState({
-                address: demoUser.wallet.address,
-                balance: savedBalance ? parseFloat(savedBalance) : 100.0, // Start with 100 MOVE for demo
+                address: userAddress,
+                balance: initialBalance,
                 isConnected: true,
                 isLoading: false,
             });
-        } else {
-            setWalletState(prev => ({ ...prev, isLoading: false }));
-        }
 
-        if (savedTransactions) {
-            try {
-                const parsed = JSON.parse(savedTransactions);
-                setTransactions(parsed.map((tx: Transaction) => ({
-                    ...tx,
-                    timestamp: new Date(tx.timestamp),
-                })));
-            } catch {
-                setTransactions([]);
+            // Save initial balance if new user
+            if (savedBalance === null) {
+                localStorage.setItem(balanceKey, initialBalance.toString());
             }
-        }
-    }, [authenticated, demoUser]);
 
-    // Save balance to localStorage
+            if (savedTransactions) {
+                try {
+                    const parsed = JSON.parse(savedTransactions);
+                    setTransactions(parsed.map((tx: Transaction) => ({
+                        ...tx,
+                        timestamp: new Date(tx.timestamp),
+                    })));
+                } catch {
+                    setTransactions([]);
+                }
+            }
+        } else {
+            setWalletState(prev => ({ ...prev, isLoading: false, isConnected: false }));
+            setTransactions([]);
+        }
+    }, [authenticated, userAddress]);
+
+    // Save balance to localStorage (user-specific)
     const updateBalance = useCallback((newBalance: number) => {
+        if (!userAddress) return;
         setWalletState(prev => ({ ...prev, balance: newBalance }));
-        localStorage.setItem(WALLET_BALANCE_KEY, newBalance.toString());
-    }, []);
+        localStorage.setItem(getStorageKey(userAddress, 'balance'), newBalance.toString());
+    }, [userAddress]);
+
+    // Save transactions to localStorage (user-specific)
+    const saveTransactions = useCallback((txs: Transaction[]) => {
+        if (!userAddress) return;
+        localStorage.setItem(getStorageKey(userAddress, 'transactions'), JSON.stringify(txs));
+    }, [userAddress]);
 
     // Add transaction
     const addTransaction = useCallback((tx: Omit<Transaction, 'id' | 'timestamp'>) => {
@@ -83,12 +102,12 @@ export function useWallet() {
 
         setTransactions(prev => {
             const updated = [newTx, ...prev];
-            localStorage.setItem(TRANSACTIONS_STORAGE_KEY, JSON.stringify(updated));
+            saveTransactions(updated);
             return updated;
         });
 
         return newTx;
-    }, []);
+    }, [saveTransactions]);
 
     // Make payment
     const makePayment = useCallback(async (
@@ -154,7 +173,7 @@ export function useWallet() {
         return { success: true, txHash };
     }, [walletState, updateBalance, addTransaction]);
 
-    // Fund wallet (for demo)
+    // Fund wallet (for testing)
     const fundWallet = useCallback(async (amount: number) => {
         await new Promise(resolve => setTimeout(resolve, 1000));
         const newBalance = walletState.balance + amount;
@@ -163,7 +182,7 @@ export function useWallet() {
         addTransaction({
             type: 'incoming',
             service: 'Faucet',
-            counterparty: 'Movement Faucet',
+            counterparty: 'Movement Testnet Faucet',
             amount,
             status: 'completed',
             txHash: `0x${Array.from({ length: 64 }, () =>
