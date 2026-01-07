@@ -1,121 +1,56 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { useWallet } from './useWallet';
+import { useRealWallet } from './useRealWallet';
+import { X402_CONFIG, MOVEMENT_NETWORK } from '@/lib/x402-config';
 
-interface ServiceResult {
+export interface ServiceResult {
     success: boolean;
     result?: unknown;
     error?: string;
     txHash?: string;
     processingTime?: number;
+    x402?: {
+        paymentVerified: boolean;
+        network: string;
+        amount: number;
+        asset: string;
+    };
 }
 
-// Mock AI services that actually return results
-const executeServiceLogic = async (
-    serviceId: string,
-    input: Record<string, unknown>
-): Promise<unknown> => {
-    // Add realistic delay
-    await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+export interface X402PaymentDetails {
+    required: boolean;
+    price: number;
+    asset: string;
+    network: string;
+    payTo: string;
+}
 
-    switch (serviceId) {
-        case 'svc-001': // GPT-4 Text Generation
-            const prompt = input.prompt as string || 'Hello';
-            return {
-                text: generateMockText(prompt),
-                tokens_used: Math.floor(Math.random() * 200) + 50,
-                model: 'gpt-4',
-                finish_reason: 'stop',
-            };
-
-        case 'svc-002': // Image Generation
-            return {
-                url: `https://picsum.photos/seed/${Date.now()}/512/512`,
-                width: 512,
-                height: 512,
-                seed: Math.floor(Math.random() * 100000),
-                model: 'sdxl-1.0',
-            };
-
-        case 'svc-003': // Translation
-            const text = input.text as string || 'Hello';
-            const targetLang = input.target_lang as string || 'es';
-            return {
-                translated: translateMock(text, targetLang),
-                source_lang: 'en',
-                target_lang: targetLang,
-                confidence: 0.95 + Math.random() * 0.05,
-            };
-
-        case 'svc-004': // Code Review
-            return {
-                issues: [
-                    { severity: 'warning', line: 5, message: 'Consider using const instead of let' },
-                    { severity: 'info', line: 12, message: 'Function could be simplified' },
-                ],
-                score: 85 + Math.floor(Math.random() * 15),
-                suggestions: ['Add type annotations', 'Consider error handling'],
-            };
-
-        case 'svc-005': // Data Extraction
-            return {
-                data: {
-                    title: 'Extracted Title',
-                    description: 'Extracted description from the document',
-                    entities: ['Entity 1', 'Entity 2', 'Entity 3'],
-                },
-                confidence: 0.92,
-                processingTime: '1.2s',
-            };
-
-        case 'svc-006': // Audio Transcription
-            return {
-                transcript: 'This is a sample transcription of the audio content.',
-                duration: 45.5,
-                language: 'en',
-                confidence: 0.94,
-                segments: [
-                    { start: 0, end: 10, text: 'This is a sample' },
-                    { start: 10, end: 20, text: 'transcription of the audio content.' },
-                ],
-            };
-
-        default:
-            return { message: 'Service executed successfully', timestamp: new Date().toISOString() };
-    }
-};
-
-// Mock text generation
-const generateMockText = (prompt: string): string => {
-    const templates = [
-        `Based on your prompt "${prompt.slice(0, 50)}...", here's the generated content:\n\nThe future of AI-powered services is here. With AgentPay, autonomous agents can transact seamlessly, paying for services in real-time using the x402 protocol. This revolutionary approach eliminates traditional payment friction and enables true machine-to-machine commerce.`,
-        `Regarding "${prompt.slice(0, 50)}...":\n\nAs we enter the era of agentic AI, the need for native payment infrastructure becomes critical. Movement Network provides the perfect foundation with its high-speed, low-cost transactions, enabling micropayments that were previously impossible.`,
-        `Here's my analysis of "${prompt.slice(0, 50)}...":\n\nThe intersection of AI and blockchain technology opens unprecedented opportunities. AgentPay stands at this crossroads, providing the payment rails that enable autonomous agents to operate independently in the digital economy.`,
-    ];
-    return templates[Math.floor(Math.random() * templates.length)];
-};
-
-// Mock translation
-const translateMock = (text: string, targetLang: string): string => {
-    const translations: Record<string, Record<string, string>> = {
-        'Hello': { es: 'Hola', fr: 'Bonjour', de: 'Hallo', ja: 'こんにちは' },
-        'How are you?': { es: '¿Cómo estás?', fr: 'Comment allez-vous?', de: 'Wie geht es dir?', ja: 'お元気ですか？' },
-    };
-
-    if (translations[text] && translations[text][targetLang]) {
-        return translations[text][targetLang];
-    }
-
-    // Generic mock translation
-    return `[${targetLang.toUpperCase()}] ${text}`;
-};
-
+/**
+ * useX402Service - Hook for executing services via x402 payment protocol
+ * 
+ * This hook implements the client-side x402 flow:
+ * 1. Request service → receive 402 with payment requirements
+ * 2. Execute payment via wallet
+ * 3. Retry request with PAYMENT-SIGNATURE header
+ * 4. Receive service result
+ */
 export function useX402Service() {
-    const { makePayment, isConnected, balance } = useWallet();
+    const {
+        makeX402Payment,
+        isConnected,
+        balance,
+        address,
+        isProcessingPayment,
+    } = useRealWallet();
+
     const [isProcessing, setIsProcessing] = useState(false);
     const [lastResult, setLastResult] = useState<ServiceResult | null>(null);
+    const [paymentStep, setPaymentStep] = useState<'idle' | 'requesting' | 'paying' | 'executing'>('idle');
 
+    /**
+     * Execute a service following x402 protocol
+     */
     const executeService = useCallback(async (
         serviceId: string,
         serviceName: string,
@@ -128,49 +63,165 @@ export function useX402Service() {
         }
 
         if (balance < price) {
-            return { success: false, error: `Insufficient balance. Need ${price} MOVE, have ${balance.toFixed(4)} MOVE` };
+            return {
+                success: false,
+                error: `Insufficient balance. Need ${price} MOVE, have ${balance.toFixed(4)} MOVE`
+            };
         }
 
         setIsProcessing(true);
         const startTime = Date.now();
 
         try {
-            // Step 1: Make payment via x402
-            const paymentResult = await makePayment(price, serviceName, providerAddress);
+            // Step 1: Initial request (will return 402)
+            setPaymentStep('requesting');
+            console.log(`[x402] Requesting service: ${serviceName}`);
 
-            if (!paymentResult.success) {
+            const initialResponse = await fetch(`/api/services/${serviceId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ input }),
+            });
+
+            // We expect a 402 response
+            if (initialResponse.status === 402) {
+                console.log('[x402] Received 402 Payment Required');
+
+                // Extract payment requirements from response
+                const paymentRequired = await initialResponse.json();
+                console.log('[x402] Payment requirements:', paymentRequired);
+
+                // Step 2: Execute payment
+                setPaymentStep('paying');
+                console.log('[x402] Executing payment...');
+
+                const paymentResult = await makeX402Payment(
+                    price,
+                    providerAddress,
+                    serviceId,
+                    serviceName
+                );
+
+                if (!paymentResult.success) {
+                    setIsProcessing(false);
+                    setPaymentStep('idle');
+                    return { success: false, error: paymentResult.error };
+                }
+
+                console.log('[x402] Payment successful:', paymentResult.txHash);
+
+                // Step 3: Retry with payment signature
+                setPaymentStep('executing');
+                console.log('[x402] Retrying with payment signature...');
+
+                const paidResponse = await fetch(`/api/services/${serviceId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'PAYMENT-SIGNATURE': paymentResult.paymentPayload || '',
+                    },
+                    body: JSON.stringify({ input }),
+                });
+
+                if (!paidResponse.ok) {
+                    const errorData = await paidResponse.json().catch(() => ({}));
+                    setIsProcessing(false);
+                    setPaymentStep('idle');
+                    return {
+                        success: false,
+                        error: errorData.error || 'Service execution failed after payment',
+                        txHash: paymentResult.txHash,
+                    };
+                }
+
+                // Success!
+                const result = await paidResponse.json();
+                const processingTime = Date.now() - startTime;
+
+                console.log('[x402] Service executed successfully');
+
+                const serviceResult: ServiceResult = {
+                    success: true,
+                    result: result.result,
+                    txHash: paymentResult.txHash,
+                    processingTime,
+                    x402: {
+                        paymentVerified: result.payment?.verified || true,
+                        network: X402_CONFIG.network,
+                        amount: price,
+                        asset: X402_CONFIG.asset.symbol,
+                    },
+                };
+
+                setLastResult(serviceResult);
                 setIsProcessing(false);
-                return { success: false, error: paymentResult.error };
+                setPaymentStep('idle');
+                return serviceResult;
             }
 
-            // Step 2: Execute the service
-            const result = await executeServiceLogic(serviceId, input);
-
+            // If we got a 200 directly (shouldn't happen without payment header)
+            const result = await initialResponse.json();
             const processingTime = Date.now() - startTime;
 
             const serviceResult: ServiceResult = {
                 success: true,
                 result,
-                txHash: paymentResult.txHash,
                 processingTime,
             };
 
             setLastResult(serviceResult);
             setIsProcessing(false);
+            setPaymentStep('idle');
             return serviceResult;
 
         } catch (error) {
             setIsProcessing(false);
+            setPaymentStep('idle');
             const errorMessage = error instanceof Error ? error.message : 'Service execution failed';
+            console.error('[x402] Error:', errorMessage);
             return { success: false, error: errorMessage };
         }
-    }, [isConnected, balance, makePayment]);
+    }, [isConnected, balance, makeX402Payment]);
+
+    /**
+     * Get payment requirements for a service without executing
+     */
+    const getPaymentRequirements = useCallback(async (
+        serviceId: string
+    ): Promise<X402PaymentDetails | null> => {
+        try {
+            const response = await fetch(`/api/services/${serviceId}`);
+
+            if (response.status === 402) {
+                const data = await response.json();
+                return {
+                    required: true,
+                    price: data.service?.price || 0,
+                    asset: data.x402?.asset || 'MOVE',
+                    network: data.x402?.network || X402_CONFIG.network,
+                    payTo: data.service?.providerAddress || '',
+                };
+            }
+
+            return null;
+        } catch (error) {
+            console.error('[x402] Error getting payment requirements:', error);
+            return null;
+        }
+    }, []);
 
     return {
         executeService,
-        isProcessing,
+        getPaymentRequirements,
+        isProcessing: isProcessing || isProcessingPayment,
+        paymentStep,
         lastResult,
         isConnected,
         balance,
+        walletAddress: address,
+        network: MOVEMENT_NETWORK,
+        x402Config: X402_CONFIG,
     };
 }

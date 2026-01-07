@@ -3,112 +3,40 @@
 import { useRouter, useParams } from 'next/navigation';
 import { useEffect, useState, useCallback } from 'react';
 import { useDemoMode } from '@/providers/PrivyProvider';
-import { useWallet } from '@/hooks/useWallet';
+import { useRealWallet } from '@/hooks/useRealWallet';
+import { useX402Service } from '@/hooks/useX402Service';
 import { useMarketplace, MarketplaceService } from '@/hooks/useMarketplace';
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
 import Link from 'next/link';
 
-// Mock AI responses based on category
-const generateMockResponse = (service: MarketplaceService, inputs: Record<string, string>) => {
-    const category = service.category;
-
-    switch (category) {
-        case 'text-generation':
-            const prompt = inputs.prompt || inputs.input || 'Hello';
-            return {
-                success: true,
-                data: {
-                    text: `Generated response for: "${prompt.slice(0, 50)}..."
-
-This is a simulated AI response from ${service.agentName}'s ${service.name} service. In a production environment, this would connect to a real AI endpoint.
-
-Key points:
-• The x402 payment was processed successfully
-• Your MOVE tokens were transferred to the service provider
-• The response was generated in real-time
-
-Thank you for using AgentPay's x402 marketplace!`,
-                    tokens_used: Math.floor(Math.random() * 500) + 100,
-                    model: 'gpt-4-simulation',
-                },
-            };
-
-        case 'image-generation':
-            return {
-                success: true,
-                data: {
-                    image_url: 'https://placehold.co/512x512/8b5cf6/white?text=AI+Generated+Image',
-                    prompt: inputs.prompt,
-                    resolution: '512x512',
-                    style: 'realistic',
-                },
-            };
-
-        case 'translation':
-            return {
-                success: true,
-                data: {
-                    original: inputs.text || 'Hello',
-                    translated: `[${inputs.target_lang || 'es'}] Translated: "${inputs.text || 'Hello'}"`,
-                    source_lang: 'en',
-                    target_lang: inputs.target_lang || 'es',
-                    confidence: 0.98,
-                },
-            };
-
-        case 'code':
-            return {
-                success: true,
-                data: {
-                    analysis: 'Code analysis complete',
-                    issues_found: 0,
-                    suggestions: ['Consider adding type annotations', 'Use async/await for async operations'],
-                    security_score: 95,
-                },
-            };
-
-        case 'data':
-            return {
-                success: true,
-                data: {
-                    records_processed: Math.floor(Math.random() * 1000) + 100,
-                    insights: ['Pattern A detected in 45% of records', 'Anomaly detected at row 234'],
-                    processing_time_ms: Math.floor(Math.random() * 2000) + 500,
-                },
-            };
-
-        default:
-            return {
-                success: true,
-                data: {
-                    result: 'Service executed successfully',
-                    input_received: inputs,
-                    timestamp: new Date().toISOString(),
-                },
-            };
-    }
-};
-
 export default function ServiceDetailPage() {
     const router = useRouter();
     const params = useParams();
     const demoMode = useDemoMode();
-    const { balance, makePayment } = useWallet();
+    const { balance, fundWallet } = useRealWallet();
+    const { executeService, isProcessing, paymentStep, x402Config, network } = useX402Service();
     const { services, recordServiceUsage } = useMarketplace();
 
     const [mounted, setMounted] = useState(false);
     const [service, setService] = useState<MarketplaceService | null>(null);
     const [inputs, setInputs] = useState<Record<string, string>>({});
-    const [isExecuting, setIsExecuting] = useState(false);
     const [result, setResult] = useState<{
         success: boolean;
         data?: Record<string, unknown>;
         error?: string;
         txHash?: string;
         cost?: number;
+        x402?: {
+            paymentVerified: boolean;
+            network: string;
+            amount: number;
+            asset: string;
+        };
+        processingTime?: number;
     } | null>(null);
     const [showFundModal, setShowFundModal] = useState(false);
+    const [isFunding, setIsFunding] = useState(false);
 
     const serviceId = params.serviceId as string;
 
@@ -145,7 +73,7 @@ export default function ServiceDetailPage() {
     }, [services, serviceId]);
 
     const handleExecute = useCallback(async () => {
-        if (!service || isExecuting) return;
+        if (!service || isProcessing) return;
 
         // Check balance
         if (balance < service.pricePerRequest) {
@@ -153,40 +81,31 @@ export default function ServiceDetailPage() {
             return;
         }
 
-        setIsExecuting(true);
         setResult(null);
 
         try {
-            // Make payment
-            const paymentResult = await makePayment(
-                service.pricePerRequest,
+            // Execute using x402 flow
+            const serviceResult = await executeService(
+                service.id,
                 service.name,
-                service.ownerWalletAddress
+                service.pricePerRequest,
+                service.ownerWalletAddress,
+                inputs
             );
 
-            if (!paymentResult.success) {
-                setResult({
-                    success: false,
-                    error: paymentResult.error || 'Payment failed',
-                });
-                setIsExecuting(false);
-                return;
+            if (serviceResult.success) {
+                // Record the usage
+                recordServiceUsage(service.id, service.pricePerRequest);
             }
 
-            // Generate response (mock or real API)
-            const response = service.apiEndpoint
-                ? await callRealApi(service.apiEndpoint, inputs)
-                : generateMockResponse(service, inputs);
-
-            // Record the usage
-            recordServiceUsage(service.id, service.pricePerRequest);
-
             setResult({
-                success: response.success,
-                data: response.data,
-                error: response.success ? undefined : 'Service execution failed',
-                txHash: paymentResult.txHash,
+                success: serviceResult.success,
+                data: serviceResult.result as Record<string, unknown> | undefined,
+                error: serviceResult.error,
+                txHash: serviceResult.txHash,
                 cost: service.pricePerRequest,
+                x402: serviceResult.x402,
+                processingTime: serviceResult.processingTime,
             });
 
         } catch (error) {
@@ -195,23 +114,13 @@ export default function ServiceDetailPage() {
                 error: error instanceof Error ? error.message : 'Execution failed',
             });
         }
+    }, [service, inputs, balance, isProcessing, executeService, recordServiceUsage]);
 
-        setIsExecuting(false);
-    }, [service, inputs, balance, makePayment, recordServiceUsage, isExecuting]);
-
-    // Call real API endpoint (if configured)
-    const callRealApi = async (endpoint: string, data: Record<string, string>) => {
-        try {
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data),
-            });
-            const result = await response.json();
-            return { success: true, data: result };
-        } catch {
-            return { success: false, data: { error: 'API call failed' } };
-        }
+    const handleFund = async () => {
+        setIsFunding(true);
+        await fundWallet(10);
+        setIsFunding(false);
+        setShowFundModal(false);
     };
 
     const getCategoryIcon = (category: string) => {
@@ -222,6 +131,15 @@ export default function ServiceDetailPage() {
             case 'code': return '💻';
             case 'data': return '📊';
             default: return '⚡';
+        }
+    };
+
+    const getPaymentStepLabel = () => {
+        switch (paymentStep) {
+            case 'requesting': return 'Requesting service...';
+            case 'paying': return 'Executing payment on Movement...';
+            case 'executing': return 'Service executing...';
+            default: return 'Processing...';
         }
     };
 
@@ -287,7 +205,7 @@ export default function ServiceDetailPage() {
                                         <div className="flex items-center gap-3 mb-1">
                                             <h1 className="text-2xl font-bold">{service.name}</h1>
                                             <span className="px-2 py-1 text-xs rounded-full bg-[var(--accent-success)]/20 text-[var(--accent-success)]">
-                                                Active
+                                                x402 Enabled
                                             </span>
                                         </div>
                                         <p className="text-[var(--text-secondary)]">
@@ -356,6 +274,7 @@ export default function ServiceDetailPage() {
                                                     onChange={(e) => setInputs(prev => ({ ...prev, [field.field]: e.target.value }))}
                                                     placeholder={field.placeholder}
                                                     className="input-field min-h-[100px] resize-none"
+                                                    disabled={isProcessing}
                                                 />
                                             ) : (
                                                 <input
@@ -364,6 +283,7 @@ export default function ServiceDetailPage() {
                                                     onChange={(e) => setInputs(prev => ({ ...prev, [field.field]: e.target.value }))}
                                                     placeholder={field.placeholder}
                                                     className="input-field"
+                                                    disabled={isProcessing}
                                                 />
                                             )}
                                         </div>
@@ -371,30 +291,72 @@ export default function ServiceDetailPage() {
 
                                     <button
                                         onClick={handleExecute}
-                                        disabled={isExecuting || service.inputSchema.some(f => f.required && !inputs[f.field])}
+                                        disabled={isProcessing || service.inputSchema.some(f => f.required && !inputs[f.field])}
                                         className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
                                     >
-                                        {isExecuting ? (
+                                        {isProcessing ? (
                                             <>
                                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                                Processing Payment...
+                                                {getPaymentStepLabel()}
                                             </>
                                         ) : (
                                             <>
                                                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                                                 </svg>
-                                                Pay {service.pricePerRequest} MOVE & Execute
+                                                Pay {service.pricePerRequest} MOVE &amp; Execute via x402
                                             </>
                                         )}
                                     </button>
                                 </div>
 
+                                {/* x402 Flow Visualization */}
+                                {isProcessing && (
+                                    <div className="mt-6 p-4 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--accent-primary)]/30">
+                                        <h4 className="text-sm font-semibold text-[var(--accent-primary)] mb-4">x402 Payment Flow</h4>
+                                        <div className="space-y-3">
+                                            <div className={`flex items-center gap-3 transition-opacity ${paymentStep === 'requesting' || paymentStep === 'paying' || paymentStep === 'executing' ? 'opacity-100' : 'opacity-40'}`}>
+                                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${paymentStep === 'requesting' ? 'bg-[var(--accent-primary)] text-white animate-pulse' : paymentStep !== 'idle' ? 'bg-[var(--accent-success)] text-white' : 'bg-[var(--bg-secondary)]'}`}>
+                                                    {paymentStep !== 'idle' && paymentStep !== 'requesting' ? '✓' : '1'}
+                                                </div>
+                                                <div>
+                                                    <span className="text-sm">Request → HTTP 402 Payment Required</span>
+                                                    {paymentStep === 'requesting' && <span className="ml-2 text-xs text-[var(--accent-primary)]">In progress...</span>}
+                                                </div>
+                                            </div>
+                                            <div className={`flex items-center gap-3 transition-opacity ${paymentStep === 'paying' || paymentStep === 'executing' ? 'opacity-100' : 'opacity-40'}`}>
+                                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${paymentStep === 'paying' ? 'bg-[var(--accent-primary)] text-white animate-pulse' : paymentStep === 'executing' ? 'bg-[var(--accent-success)] text-white' : 'bg-[var(--bg-secondary)]'}`}>
+                                                    {paymentStep === 'executing' ? '✓' : '2'}
+                                                </div>
+                                                <div>
+                                                    <span className="text-sm">Sign & Submit Payment on Movement</span>
+                                                    {paymentStep === 'paying' && <span className="ml-2 text-xs text-[var(--accent-primary)]">Signing...</span>}
+                                                </div>
+                                            </div>
+                                            <div className={`flex items-center gap-3 transition-opacity ${paymentStep === 'executing' ? 'opacity-100' : 'opacity-40'}`}>
+                                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${paymentStep === 'executing' ? 'bg-[var(--accent-primary)] text-white animate-pulse' : 'bg-[var(--bg-secondary)]'}`}>
+                                                    3
+                                                </div>
+                                                <div>
+                                                    <span className="text-sm">Retry with PAYMENT-SIGNATURE header</span>
+                                                    {paymentStep === 'executing' && <span className="ml-2 text-xs text-[var(--accent-primary)]">Executing...</span>}
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-3 opacity-40">
+                                                <div className="w-6 h-6 rounded-full bg-[var(--bg-secondary)] flex items-center justify-center text-xs">
+                                                    4
+                                                </div>
+                                                <span className="text-sm">Receive result with PAYMENT-RESPONSE</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Result */}
                                 {result && (
                                     <div className={`mt-6 p-4 rounded-xl ${result.success
-                                            ? 'bg-[var(--accent-success)]/10 border border-[var(--accent-success)]/30'
-                                            : 'bg-[var(--accent-error)]/10 border border-[var(--accent-error)]/30'
+                                        ? 'bg-[var(--accent-success)]/10 border border-[var(--accent-success)]/30'
+                                        : 'bg-[var(--accent-error)]/10 border border-[var(--accent-error)]/30'
                                         }`}>
                                         <div className="flex items-center gap-2 mb-3">
                                             {result.success ? (
@@ -407,27 +369,47 @@ export default function ServiceDetailPage() {
                                                 </svg>
                                             )}
                                             <span className={`font-semibold ${result.success ? 'text-[var(--accent-success)]' : 'text-[var(--accent-error)]'}`}>
-                                                {result.success ? 'Success!' : 'Failed'}
+                                                {result.success ? 'x402 Payment Successful!' : 'Failed'}
                                             </span>
-                                            {result.cost && (
-                                                <span className="text-sm text-[var(--text-tertiary)] ml-2">
-                                                    Cost: {result.cost} MOVE
+                                            {result.processingTime && (
+                                                <span className="text-xs text-[var(--text-tertiary)] ml-2">
+                                                    ({(result.processingTime / 1000).toFixed(2)}s)
                                                 </span>
                                             )}
                                         </div>
 
+                                        {result.x402 && result.success && (
+                                            <div className="mb-3 p-3 rounded-lg bg-[var(--bg-tertiary)] grid grid-cols-2 gap-2 text-xs">
+                                                <div>
+                                                    <span className="text-[var(--text-tertiary)]">Network:</span>
+                                                    <span className="ml-2 font-mono">{result.x402.network}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-[var(--text-tertiary)]">Amount:</span>
+                                                    <span className="ml-2 font-mono">{result.x402.amount} {result.x402.asset}</span>
+                                                </div>
+                                                <div className="col-span-2">
+                                                    <span className="text-[var(--text-tertiary)]">Verified:</span>
+                                                    <span className="ml-2 text-[var(--accent-success)]">✓ Payment verified via x402</span>
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {result.txHash && (
                                             <div className="mb-3 p-2 rounded bg-black/20 text-xs font-mono text-[var(--text-tertiary)] break-all">
-                                                TX: {result.txHash}
+                                                <span className="text-[var(--text-secondary)]">TX:</span> {result.txHash}
                                             </div>
                                         )}
 
                                         {result.success && result.data && (
-                                            <pre className="p-4 rounded-xl bg-[var(--bg-tertiary)] overflow-x-auto text-sm whitespace-pre-wrap">
-                                                <code className="text-[var(--text-secondary)]">
-                                                    {JSON.stringify(result.data, null, 2)}
-                                                </code>
-                                            </pre>
+                                            <div>
+                                                <h4 className="text-sm font-semibold mb-2 text-[var(--text-secondary)]">Service Response:</h4>
+                                                <pre className="p-4 rounded-xl bg-[var(--bg-tertiary)] overflow-x-auto text-sm whitespace-pre-wrap max-h-[300px] overflow-y-auto">
+                                                    <code className="text-[var(--text-secondary)]">
+                                                        {JSON.stringify(result.data, null, 2)}
+                                                    </code>
+                                                </pre>
+                                            </div>
                                         )}
 
                                         {!result.success && result.error && (
@@ -472,27 +454,54 @@ export default function ServiceDetailPage() {
                                 </div>
                             </div>
 
+                            {/* Network Info */}
+                            <div className="glass-card p-6 border border-[var(--accent-secondary)]/30">
+                                <h3 className="font-semibold mb-4 text-[var(--accent-secondary)]">Network</h3>
+                                <div className="space-y-2 text-sm">
+                                    <div className="flex justify-between">
+                                        <span className="text-[var(--text-tertiary)]">Chain</span>
+                                        <span className="font-mono">{network.name}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-[var(--text-tertiary)]">Chain ID</span>
+                                        <span className="font-mono">{network.chainId}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-[var(--text-tertiary)]">CAIP-2</span>
+                                        <span className="font-mono text-xs">{x402Config.network}</span>
+                                    </div>
+                                </div>
+                            </div>
+
                             {/* How It Works */}
                             <div className="glass-card p-6 border border-[var(--accent-primary)]/30">
-                                <h3 className="font-semibold mb-4 text-[var(--accent-primary)]">x402 Payment Flow</h3>
+                                <h3 className="font-semibold mb-4 text-[var(--accent-primary)]">x402 Protocol</h3>
                                 <div className="space-y-3 text-sm">
                                     <div className="flex items-start gap-3">
                                         <div className="w-6 h-6 rounded-full bg-[var(--accent-primary)]/20 flex items-center justify-center text-xs text-[var(--accent-primary)]">1</div>
-                                        <p className="text-[var(--text-secondary)]">You click &quot;Pay & Execute&quot;</p>
+                                        <p className="text-[var(--text-secondary)]">Request returns HTTP 402</p>
                                     </div>
                                     <div className="flex items-start gap-3">
                                         <div className="w-6 h-6 rounded-full bg-[var(--accent-primary)]/20 flex items-center justify-center text-xs text-[var(--accent-primary)]">2</div>
-                                        <p className="text-[var(--text-secondary)]">Payment is verified atomically</p>
+                                        <p className="text-[var(--text-secondary)]">Sign payment on Movement</p>
                                     </div>
                                     <div className="flex items-start gap-3">
                                         <div className="w-6 h-6 rounded-full bg-[var(--accent-primary)]/20 flex items-center justify-center text-xs text-[var(--accent-primary)]">3</div>
-                                        <p className="text-[var(--text-secondary)]">Service executes & returns result</p>
+                                        <p className="text-[var(--text-secondary)]">Retry with payment proof</p>
                                     </div>
                                     <div className="flex items-start gap-3">
                                         <div className="w-6 h-6 rounded-full bg-[var(--accent-primary)]/20 flex items-center justify-center text-xs text-[var(--accent-primary)]">4</div>
-                                        <p className="text-[var(--text-secondary)]">Provider receives payment instantly</p>
+                                        <p className="text-[var(--text-secondary)]">Receive result atomically</p>
                                     </div>
                                 </div>
+                                <a
+                                    href="https://x402.org"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="mt-4 text-xs text-[var(--accent-primary)] hover:underline block"
+                                >
+                                    Learn more about x402 →
+                                </a>
                             </div>
                         </div>
                     </div>
@@ -521,9 +530,13 @@ export default function ServiceDetailPage() {
                             >
                                 Cancel
                             </button>
-                            <Link href="/dashboard" className="btn-primary flex-1 text-center">
-                                Get MOVE
-                            </Link>
+                            <button
+                                onClick={handleFund}
+                                disabled={isFunding}
+                                className="btn-primary flex-1"
+                            >
+                                {isFunding ? 'Funding...' : 'Get 10 MOVE'}
+                            </button>
                         </div>
                     </div>
                 </div>
